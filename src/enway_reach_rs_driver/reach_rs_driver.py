@@ -1,4 +1,4 @@
-#! /usr/bin/env python
+#! /usr/bin/env python3
 
 # Software License Agreement (BSD License)
 #
@@ -37,11 +37,12 @@ __license__ = "BSD"
 
 import rospy
 import socket
+import serial
 import diagnostic_updater
 import diagnostic_msgs
 import enway_reach_rs_driver.driver
 from sensor_msgs.msg import NavSatFix, NavSatStatus
-    
+
 FixStatus = {-1 : 'No Fix',
               0 : 'Single Fix',
               1 : 'SBAS Fix',
@@ -49,39 +50,51 @@ FixStatus = {-1 : 'No Fix',
 
 class ReachRsDriver(object):
     def __init__(self):
-        host = rospy.get_param('~reach_rs_host_or_ip', 'reach.local')
-        port = rospy.get_param('~reach_rs_port')
-        self.address = (host, port)
+        self.output_type = rospy.get_param('~output_type', 'tcp')
 
-        self.socket = None
+        if self.output_type == "tcp":
+            host = rospy.get_param('~reach_rs_host_or_ip', 'reach.local')
+            port = rospy.get_param('~reach_rs_port')
+            self.address = (host, port)
+
+            self.socket = None
+        elif self.output_type == "uart":
+            self.device = rospy.get_param('~reach_device')
+            self.baudrate = rospy.get_param('~reach_baudrate')
+            self.timeout = rospy.get_param('~reach_uart_timeout',10)
+        else:
+            rospy.logwarn("Unsupported output_type: %s" % (self.output_type))
 
         self.frame_id = rospy.get_param('~reach_rs_frame_id', 'reach_rs')
         self.fix_timeout = rospy.get_param('~fix_timeout', 0.5)
-        
+
         self.driver = enway_reach_rs_driver.driver.RosNMEADriver()
-        
+
         self.diagnostics = diagnostic_updater.Updater()
         self.diagnostics.setHardwareID('Emlid Reach RS')
         self.diagnostics.add('Receiver Status', self.add_diagnotics)
-        
+
         self.connected = False
         self.connection_status = 'not connected'
         self.last_fix = None
-        
+
     def __del__(self):
-        if self.socket:
-            self.socket.close()
-        
+        if self.output_type == "tcp":
+            if self.socket:
+                self.socket.close()
+        elif self.output_type == "uart":
+            if self.ser:
+                self.ser.close()
     def update(self):
         self.diagnostics.update()
-    
+
     def receives_fixes(self):
         if not self.last_fix:
             return False
-        
+
         duration = (rospy.Time.now() - self.last_fix.header.stamp)
         return duration.to_sec() < self.fix_timeout
-        
+
     def add_diagnotics(self, stat):
         if self.connected and self.receives_fixes():
             stat.summary(diagnostic_msgs.msg.DiagnosticStatus.OK, 'Reach RS driver is connected and has a fix')
@@ -89,56 +102,74 @@ class ReachRsDriver(object):
             stat.summary(diagnostic_msgs.msg.DiagnosticStatus.WARN, 'Reach RS driver is connected but has no fix')
         else:
             stat.summary(diagnostic_msgs.msg.DiagnosticStatus.ERROR, 'Reach RS driver has a connection problem')
-            
+
         stat.add('Connected', self.connected)
         stat.add('Connection status', self.connection_status)
-        
+
         if self.last_fix:
             stat.add("Fix status", FixStatus[self.last_fix.status.status])
             stat.add("Seconds since last fix", (rospy.Time.now() - self.last_fix.header.stamp).to_sec())
         else:
             stat.add("Fix status", FixStatus[NavSatStatus.STATUS_NO_FIX])
             stat.add("Seconds since last fix", '-')
-        
+
     def connect_to_device(self):
-        rospy.loginfo('Connecting to {0}:{1}...'.format(*self.address))
-        
+        if self.output_type == "tcp":
+            rospy.loginfo('Connecting to {0}:{1}...'.format(*self.address))
+        elif self.output_type == "uart":
+            rospy.loginfo('Connecting to %s@%d' % (self.device, self.baudrate))
+
         while not rospy.is_shutdown():
             self.update()
-            
-            if self.socket:
-                self.socket.close()
-                self.socket = None
 
-            self.connected = False
-            self.connection_status = 'not connected'
+            if self.output_type == "tcp":
+                if self.socket:
+                    self.socket.close()
+                    self.socket = None
 
-            self.socket = socket.socket()
+                self.connected = False
+                self.connection_status = 'not connected'
 
-            try:
-                self.socket.settimeout(5)
-                self.socket.connect(self.address)
-                self.connected = True
-                self.connection_status = 'connected'
-                rospy.loginfo('Successfully connected to device!')
-                return
-            except socket.timeout:
-                self.connection_status = 'connect timeout'
-            except socket.error,  msg:
-                self.connection_status = 'connect error ({0})'.format(msg)
-            
+                self.socket = socket.socket()
+
+                try:
+                    self.socket.settimeout(5)
+                    self.socket.connect(self.address)
+                    self.connected = True
+                    self.connection_status = 'connected'
+                    rospy.loginfo('Successfully connected to device!')
+                    return
+                except socket.timeout:
+                    self.connection_status = 'connect timeout'
+                except socket.error as  msg:
+                    self.connection_status = 'connect error ({0})'.format(msg)
+
+            elif self.output_type == "uart":
+
+                try:
+                    self.ser = serial.Serial(port=self.device,
+                                             baudrate=self.baudrate,
+                                             timeout=self.timeout)
+                    rospy.loginfo('Successfully connected to %s@%d' % (self.device, self.baudrate))
+                    return
+                except Exception as e:
+                    rospy.logwarn(e)
         exit()
-        
+
     def run(self):
         self.connect_to_device()
-        
+
         while not rospy.is_shutdown():
             self.update()
-            
+
             try:
-                self.socket.settimeout(self.fix_timeout)
-                data = self.socket.recv(1024)
-                
+
+                if self.output_type == "tcp":
+                    self.socket.settimeout(self.fix_timeout)
+                    data = self.socket.recv(1024)
+                elif self.output_type == "uart":
+                    data = self.ser.read(1024)                   
+
                 if data == '':
                     rospy.logwarn('Lost connection. Trying to reconnect...')
                     self.connect_to_device()
@@ -149,15 +180,15 @@ class ReachRsDriver(object):
                 self.connection_status = 'no NMEA messages received'
             except socket.error:
                 pass
-        
+
     def parse_data(self, data):
-        data = data.strip().split()
-        
+        data = data.decode("utf-8").strip().split()
+
         for sentence in data:
             if 'GGA' in sentence or 'RMC' in sentence:
                 try:
                     fix = self.driver.add_sentence(sentence, self.frame_id)
-                    
+
                     if fix:
                         self.last_fix = fix
                 except ValueError as e:
