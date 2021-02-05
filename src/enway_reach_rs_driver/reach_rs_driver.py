@@ -61,7 +61,7 @@ class ReachRsDriver(object):
         elif self.output_type == "uart":
             self.device = rospy.get_param('~reach_device')
             self.baudrate = rospy.get_param('~reach_baudrate')
-            self.timeout = rospy.get_param('~reach_uart_timeout',10)
+            self.timeout = rospy.get_param('~reach_uart_timeout',0.1)
         else:
             rospy.logwarn("Unsupported output_type: %s" % (self.output_type))
 
@@ -168,7 +168,8 @@ class ReachRsDriver(object):
                     self.socket.settimeout(self.fix_timeout)
                     data = self.socket.recv(1024)
                 elif self.output_type == "uart":
-                    data = self.ser.read(1024)                   
+                    data = self.ser.read_until()
+                    #data = self.ser.read(1024)
 
                 if data == '':
                     rospy.logwarn('Lost connection. Trying to reconnect...')
@@ -182,7 +183,12 @@ class ReachRsDriver(object):
                 pass
 
     def parse_data(self, data):
-        data = data.decode("utf-8").strip().split()
+        #rospy.loginfo("RCV data: %s" % data)
+        try:
+            data = data.decode("utf-8").strip().split()
+        except:
+            rospy.logwarn("decoding error: %s" % (data))
+            data = data.decode("utf-8",errors="ignore").strip().split()
 
         for sentence in data:
             if 'GGA' in sentence or 'RMC' in sentence:

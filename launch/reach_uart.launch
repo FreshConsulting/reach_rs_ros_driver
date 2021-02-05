@@ -1,12 +1,12 @@
 <launch>
     <arg name="device" default="/dev/ttyUSB0" />
-    <arg name="baudrate" default="57600" />
+    <arg name="baudrate" default="115200" />
 
     <node name="reach_rs_node" pkg="reach_rs_driver" type="reach_rs_driver_node.py" output="screen">
         <param name="output_type" value="uart" />
         <param name="reach_device" value="$(arg device)" />
         <param name="reach_baudrate" value="$(arg baudrate)" />
-        <param name="useRMC" value="true" />
+        <param name="useRMC" value="false" />
         <remap from="/fix" to="/reach/rtk/fix" />
         <remap from="/vel" to="/reach/rtk/vel" />
         <remap from="/time_reference" to="/reach/rtk/time_reference" />
