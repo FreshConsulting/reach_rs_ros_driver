@@ -120,6 +120,10 @@ class RosNMEADriver(object):
                 current_fix.position_covariance[8] = (2 * hdop) ** 2  # FIXME
                 current_fix.position_covariance_type = \
                     NavSatFix.COVARIANCE_TYPE_APPROXIMATED
+            
+            current_fix.position_covariance[0] /= 10.0
+            current_fix.position_covariance[4] /= 10.0
+            current_fix.position_covariance[8] /= 10.0
 
             # Altitude is above ellipsoid, so adjust for mean-sea-level
             altitude = data['altitude'] + data['mean_sea_level']
